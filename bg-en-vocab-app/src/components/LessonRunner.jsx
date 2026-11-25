@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import confetti from 'canvas-confetti';
-import { ArrowRight, Repeat, Sparkles, Volume2, X } from 'lucide-react';
+import { ArrowRight, Repeat, RotateCcw, Sparkles, Volume2, X } from 'lucide-react';
 import { FALLBACK_DISTRACTORS } from '../data/demoData';
 import { normalizeAnswer, shuffle, speakEnglish } from '../lib/speech';
 
@@ -38,18 +38,25 @@ function buildMatchBatches(words) {
   return batches;
 }
 
-export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }) {
-  const [stage, setStage] = useState(1);
+export default function LessonRunner({
+  topic,
+  allTopics,
+  singleStage = null,
+  onComplete,
+  onRepeat,
+  onNextSubsection,
+  onExit,
+  t
+}) {
+  const [stage, setStage] = useState(singleStage || 1);
   const [totalAttempts, setTotalAttempts] = useState(0);
   const [correctAttempts, setCorrectAttempts] = useState(0);
   const [mistakeIds, setMistakeIds] = useState(() => new Set());
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
-  // Stage 1: Flashcards (2 passes)
   const [s1Pass, setS1Pass] = useState(1);
   const [s1Index, setS1Index] = useState(0);
 
-  // Stage 2 & 3: Quiz
   const [s2Queue] = useState(() => shuffle(topic.words));
   const [s2Index, setS2Index] = useState(0);
   const [s2Answered, setS2Answered] = useState(null);
@@ -58,7 +65,6 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
   const [s3Index, setS3Index] = useState(0);
   const [s3Answered, setS3Answered] = useState(null);
 
-  // Stage 4: Match pairs
   const [s4Batches] = useState(() => buildMatchBatches(topic.words));
   const [s4BatchIdx, setS4BatchIdx] = useState(0);
   const [s4Matched, setS4Matched] = useState([]);
@@ -66,13 +72,11 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
   const [s4SelRight, setS4SelRight] = useState(null);
   const [s4Error, setS4Error] = useState(null);
 
-  // Stage 5: Typing EN -> BG
   const [s5Queue] = useState(() => shuffle(topic.words));
   const [s5Index, setS5Index] = useState(0);
   const [s5Input, setS5Input] = useState('');
   const [s5Feedback, setS5Feedback] = useState(null);
 
-  // Stage 6: Typing BG -> EN (repeats wrong words at end of stage)
   const [s6Queue, setS6Queue] = useState(() => shuffle(topic.words).map((w) => ({ word: w, isRepeat: false })));
   const [s6Index, setS6Index] = useState(0);
   const [s6Input, setS6Input] = useState('');
@@ -99,6 +103,11 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
     t('stage7Name')
   ];
 
+  const finishOrAdvance = (nextFullStage) => {
+    if (singleStage !== null) setStage(7);
+    else setStage(nextFullStage);
+  };
+
   const recordMistake = (wordId) => {
     setMistakeIds((prev) => {
       const next = new Set(prev);
@@ -111,14 +120,14 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
     if (stage === 7) {
       const accuracy = totalAttempts > 0 ? Math.round((correctAttempts / totalAttempts) * 100) : 100;
       const stars = accuracy >= 90 ? 3 : accuracy >= 70 ? 2 : 1;
-      const points = Math.max(20, correctAttempts * 10 + stars * 15);
+      const points =
+        singleStage === 1 ? Math.max(15, topic.words.length * 5) : Math.max(20, correctAttempts * 10 + stars * 15);
       const mistakeList = topic.words.filter((w) => mistakeIds.has(w.id));
-      onComplete({ accuracy, stars, points, mistakeList });
+      onComplete({ accuracy, stars, points, mistakeList, singleStage });
       confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
     }
   }, [stage]);
 
-  // Stage 4 pair checking
   const evaluateMatch = (leftId, rightId) => {
     if (!leftId || !rightId) return;
     setTotalAttempts((n) => n + 1);
@@ -137,7 +146,7 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
             setS4BatchIdx((i) => i + 1);
             setS4Matched([]);
           } else {
-            setStage(5);
+            finishOrAdvance(5);
           }
         }, 420);
       }
@@ -153,11 +162,31 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
     }
   };
 
-  const overallPct = Math.round(((stage - 1) / 6) * 100);
+  const computeProgressPct = () => {
+    if (stage === 7) return 100;
+    if (singleStage === null) return Math.max(8, Math.round(((stage - 1) / 6) * 100));
+    if (stage === 1) return Math.max(8, Math.round((((s1Pass - 1) * topic.words.length + s1Index) / (topic.words.length * 2)) * 100));
+    if (stage === 2) return Math.max(8, Math.round((s2Index / s2Queue.length) * 100));
+    if (stage === 3) return Math.max(8, Math.round((s3Index / s3Queue.length) * 100));
+    if (stage === 4) {
+      const doneBefore = s4Batches.slice(0, s4BatchIdx).reduce((a, b) => a + b.left.length, 0);
+      return Math.max(8, Math.round(((doneBefore + s4Matched.length) / topic.words.length) * 100));
+    }
+    if (stage === 5) return Math.max(8, Math.round((s5Index / s5Queue.length) * 100));
+    if (stage === 6) return Math.max(8, Math.round((s6Index / s6Queue.length) * 100));
+    return 10;
+  };
+
+  const overallPct = computeProgressPct();
   const accuracy = totalAttempts > 0 ? Math.round((correctAttempts / totalAttempts) * 100) : 100;
   const stars = accuracy >= 90 ? 3 : accuracy >= 70 ? 2 : 1;
-  const points = Math.max(20, correctAttempts * 10 + stars * 15);
+  const points =
+    singleStage === 1 ? Math.max(15, topic.words.length * 5) : Math.max(20, correctAttempts * 10 + stars * 15);
   const mistakeList = topic.words.filter((w) => mistakeIds.has(w.id));
+  const headerLabel =
+    singleStage !== null && stage !== 7
+      ? t('subsectionLabel', singleStage, stageNames[singleStage])
+      : `${t('stageOf', stage, 7)}: ${stageNames[stage]}`;
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
@@ -173,26 +202,23 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
             <div className="flex-1 h-4 bg-slate-200 rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-emerald-400 to-emerald-500 rounded-full transition-all duration-500"
-                style={{ width: `${Math.max(8, overallPct)}%` }}
+                style={{ width: `${overallPct}%` }}
               />
             </div>
             <span className="text-xs font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full shrink-0">
-              {stage}/7
+              {singleStage !== null ? `${overallPct}%` : `${stage}/7`}
             </span>
           </div>
           <div className="flex items-center justify-between text-xs font-bold text-slate-500 px-1">
             <span>
               {topic.emoji} {topic.title}
             </span>
-            <span className="text-slate-700 font-extrabold">
-              {t('stageOf', stage, 7)}: {stageNames[stage]}
-            </span>
+            <span className="text-slate-700 font-extrabold">{headerLabel}</span>
           </div>
         </div>
       </header>
 
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6 flex flex-col justify-center">
-        {/* STAGE 1: FLASHCARDS (2 PASSES) */}
         {stage === 1 && (
           <div className="animate-pop">
             <div className="flex items-center justify-between mb-4">
@@ -234,19 +260,24 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
                   setS1Pass(2);
                   setS1Index(0);
                 } else {
-                  setStage(2);
+                  finishOrAdvance(2);
                 }
               }}
               className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-lg btn-3d flex items-center justify-center gap-2"
               style={{ boxShadow: '0 5px 0 0 #059669' }}
             >
-              <span>{s1Pass === 2 && s1Index === topic.words.length - 1 ? t('startPractice') : t('nextCard')}</span>
+              <span>
+                {s1Pass === 2 && s1Index === topic.words.length - 1
+                  ? singleStage !== null
+                    ? t('finishCards')
+                    : t('startPractice')
+                  : t('nextCard')}
+              </span>
               <ArrowRight className="w-5 h-5" />
             </button>
           </div>
         )}
 
-        {/* STAGE 2 & 3: MULTIPLE CHOICE QUIZ */}
         {(stage === 2 || stage === 3) && (() => {
           const isBgToEn = stage === 2;
           const queue = isBgToEn ? s2Queue : s3Queue;
@@ -277,14 +308,14 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
                 setS2Index((i) => i + 1);
                 setS2Answered(null);
               } else {
-                setStage(3);
+                finishOrAdvance(3);
               }
             } else {
               if (s3Index < s3Queue.length - 1) {
                 setS3Index((i) => i + 1);
                 setS3Answered(null);
               } else {
-                setStage(4);
+                finishOrAdvance(4);
               }
             }
           };
@@ -367,7 +398,6 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
           );
         })()}
 
-        {/* STAGE 4: MATCH PAIRS (5 PER BATCH) */}
         {stage === 4 && (() => {
           const batch = s4Batches[s4BatchIdx];
           return (
@@ -444,7 +474,6 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
           );
         })()}
 
-        {/* STAGE 5 & 6: WRITTEN TRANSLATION */}
         {(stage === 5 || stage === 6) && (() => {
           const isEnToBg = stage === 5;
           const queue = isEnToBg ? s5Queue : s6Queue;
@@ -483,7 +512,7 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
                 setS5Input('');
                 setS5Feedback(null);
               } else {
-                setStage(6);
+                finishOrAdvance(6);
               }
             } else {
               if (s6Index < s6Queue.length - 1) {
@@ -491,7 +520,7 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
                 setS6Input('');
                 setS6Feedback(null);
               } else {
-                setStage(7);
+                finishOrAdvance(7);
               }
             }
           };
@@ -590,7 +619,6 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
           );
         })()}
 
-        {/* STAGE 7: SUMMARY */}
         {stage === 7 && (
           <div className="animate-pop text-center">
             <div className="bg-white rounded-3xl p-6 sm:p-8 card-shadow border-2 border-emerald-100 mb-6">
@@ -660,13 +688,33 @@ export default function LessonRunner({ topic, allTopics, onComplete, onExit, t }
               </div>
             </div>
 
-            <button
-              onClick={onExit}
-              className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-lg btn-3d"
-              style={{ boxShadow: '0 5px 0 0 #059669' }}
-            >
-              {t('returnToTopicsBtn')}
-            </button>
+            <div className="space-y-3">
+              {singleStage !== null && singleStage < 6 && (
+                <button
+                  onClick={onNextSubsection}
+                  className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-lg btn-3d flex items-center justify-center gap-2"
+                  style={{ boxShadow: '0 5px 0 0 #059669' }}
+                >
+                  <span>{t('nextSubsectionBtn')}</span>
+                  <ArrowRight className="w-5 h-5" />
+                </button>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={onRepeat}
+                  className="py-3.5 rounded-2xl bg-sky-100 hover:bg-sky-200 text-sky-800 font-extrabold text-base flex items-center justify-center gap-2"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>{t('repeatAgainBtn')}</span>
+                </button>
+                <button
+                  onClick={onExit}
+                  className="py-3.5 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-extrabold text-base"
+                >
+                  {t('backToSubsectionsBtn')}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </main>

@@ -1,8 +1,8 @@
 import React from 'react';
-import { Award, BookOpen, Play } from 'lucide-react';
-import { TOPIC_COLORS } from '../lib/i18n';
+import { Award, BookOpen, Layers } from 'lucide-react';
+import { getCompletedSubsectionsCount, TOPIC_COLORS } from '../lib/i18n';
 
-export default function ChildDashboard({ topics, progress, onStartLesson, t }) {
+export default function ChildDashboard({ topics, progress, onOpenTopic, t }) {
   const totalStars = Object.values(progress).reduce((s, p) => s + (p.stars || 0), 0);
   const completedCount = topics.filter((tp) => progress[tp.id]?.status === 'completed').length;
   const accValues = Object.values(progress)
@@ -46,14 +46,9 @@ export default function ChildDashboard({ topics, progress, onStartLesson, t }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {topics.map((tp) => {
             const c = TOPIC_COLORS[tp.color] || TOPIC_COLORS.emerald;
-            const prog = progress[tp.id] || { status: 'not_started', stars: 0, bestAccuracy: 0 };
+            const prog = progress[tp.id] || { status: 'not_started', stars: 0, bestAccuracy: 0, stages: {} };
+            const doneSubs = getCompletedSubsectionsCount(prog);
             const canStart = tp.words.length >= 2;
-            const btnLabel =
-              prog.status === 'completed'
-                ? t('repeatLesson')
-                : prog.status === 'in_progress'
-                  ? t('continueLesson')
-                  : t('startLesson');
 
             return (
               <div
@@ -70,9 +65,9 @@ export default function ChildDashboard({ topics, progress, onStartLesson, t }) {
                         <span className="text-xs font-extrabold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700">
                           ✓ {t('statusCompleted')}
                         </span>
-                      ) : prog.status === 'in_progress' ? (
+                      ) : prog.status === 'in_progress' || doneSubs > 0 ? (
                         <span className="text-xs font-extrabold px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">
-                          ⏳ {t('statusInProgress')}
+                          ⏳ {t('subsectionsShort', doneSubs, 6)}
                         </span>
                       ) : (
                         <span className="text-xs font-extrabold px-2.5 py-1 rounded-full bg-slate-100 text-slate-500">
@@ -89,7 +84,7 @@ export default function ChildDashboard({ topics, progress, onStartLesson, t }) {
                     </div>
                   </div>
                   <h2 className="text-xl font-black text-slate-800 mb-1">{tp.title}</h2>
-                  <div className="flex items-center gap-3 text-xs font-bold text-slate-500 mb-4">
+                  <div className="flex items-center gap-3 text-xs font-bold text-slate-500 mb-3">
                     <span className="inline-flex items-center gap-1">
                       <BookOpen className="w-3.5 h-3.5" /> {t('wordsCount', tp.words.length)}
                     </span>
@@ -99,18 +94,24 @@ export default function ChildDashboard({ topics, progress, onStartLesson, t }) {
                       </span>
                     )}
                   </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-4">
+                    <div
+                      className={`h-full ${c.bg} rounded-full transition-all`}
+                      style={{ width: `${Math.round((doneSubs / 6) * 100)}%` }}
+                    />
+                  </div>
                 </div>
 
                 <button
                   disabled={!canStart}
-                  onClick={() => onStartLesson(tp.id)}
+                  onClick={() => onOpenTopic(tp.id)}
                   className={`w-full py-3.5 px-4 rounded-2xl font-extrabold text-white text-base btn-3d flex items-center justify-center gap-2 ${
                     canStart ? `${c.bg} hover:brightness-105` : 'bg-slate-300 cursor-not-allowed'
                   }`}
                   style={canStart ? { boxShadow: `0 4px 0 0 ${c.shadow}` } : undefined}
                 >
-                  <Play className="w-5 h-5 fill-current" />
-                  <span>{canStart ? btnLabel : t('needWordsToStart')}</span>
+                  <Layers className="w-5 h-5" />
+                  <span>{canStart ? t('openTopic') : t('needWordsToStart')}</span>
                 </button>
               </div>
             );

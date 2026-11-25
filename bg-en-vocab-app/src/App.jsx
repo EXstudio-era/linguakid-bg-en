@@ -6,6 +6,7 @@ import Header from './components/Header';
 import LessonRunner from './components/LessonRunner';
 import ParentDashboard from './components/ParentDashboard';
 import SettingsModal from './components/SettingsModal';
+import TopicHub from './components/TopicHub';
 import { createDemoTopics } from './data/demoData';
 import { I18N } from './lib/i18n';
 import {
@@ -49,7 +50,8 @@ export default function App() {
   const [topics, setTopics] = useState(() => (initial?.topics?.length ? initial.topics : createDemoTopics()));
   const [progress, setProgress] = useState(() => initial?.progress || {});
 
-  const [activeLessonTopicId, setActiveLessonTopicId] = useState(null);
+  const [selectedChildTopicId, setSelectedChildTopicId] = useState(null);
+  const [activeLesson, setActiveLesson] = useState(null); // { topicId, singleStage, runKey }
   const [showSettings, setShowSettings] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
@@ -72,7 +74,6 @@ export default function App() {
     setTimeout(() => setToast(''), 2400);
   };
 
-  // Persist local snapshot
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -84,7 +85,6 @@ export default function App() {
     }
   }, [lang, familyCode, role, parentPin, supabaseUrl, supabaseKey, topics, progress]);
 
-  // Sync & Realtime subscription when Supabase is configured
   const syncNow = useCallback(async () => {
     if (!client || !familyCode) {
       setCloudSynced(false);
@@ -94,7 +94,15 @@ export default function App() {
       const remote = await fetchFamilyData(client, familyCode);
       if (remote.topics.length > 0) {
         setTopics(remote.topics);
-        setProgress(remote.progress);
+        setProgress((prevLocal) => {
+          const merged = { ...remote.progress };
+          Object.keys(merged).forEach((tid) => {
+            if (!merged[tid].stages && prevLocal[tid]?.stages) {
+              merged[tid].stages = prevLocal[tid].stages;
+            }
+          });
+          return merged;
+        });
       }
       setCloudSynced(true);
     } catch {
@@ -119,7 +127,6 @@ export default function App() {
     };
   }, [client, familyCode, syncNow]);
 
-  // Handlers
   const handleSaveTopic = (data) => {
     if (data.id) {
       setTopics((prev) => prev.map((tp) => (tp.id === data.id ? { ...tp, ...data } : tp)));
@@ -168,32 +175,56 @@ export default function App() {
     removeWord(client, wordId);
   };
 
-  const handleStartLesson = (topicId) => {
+  const handleStartLesson = (topicId, singleStage = null) => {
     const prev = progress[topicId] || {};
     const nextProg = {
       status: prev.status === 'completed' ? 'completed' : 'in_progress',
-      currentStage: 1,
+      currentStage: singleStage || 1,
       bestAccuracy: prev.bestAccuracy || 0,
       lastAccuracy: prev.lastAccuracy || 0,
       stars: prev.stars || 0,
       points: prev.points || 0,
-      mistakeWords: prev.mistakeWords || []
+      mistakeWords: prev.mistakeWords || [],
+      stages: prev.stages || {}
     };
     setProgress((p) => ({ ...p, [topicId]: nextProg }));
     upsertProgress(client, familyCode, topicId, nextProg);
-    setActiveLessonTopicId(topicId);
+    setActiveLesson({ topicId, singleStage, runKey: Date.now() });
   };
 
   const handleLessonComplete = (topicId, summary) => {
     const prev = progress[topicId] || {};
+    const nextStages = { ...(prev.stages || {}) };
+
+    if (summary.singleStage !== null && summary.singleStage !== undefined) {
+      const prevS = nextStages[summary.singleStage] || {};
+      nextStages[summary.singleStage] = {
+        completed: true,
+        stars: Math.max(prevS.stars || 0, summary.stars),
+        bestAccuracy: Math.max(prevS.bestAccuracy || 0, summary.accuracy)
+      };
+    } else {
+      [1, 2, 3, 4, 5, 6].forEach((n) => {
+        const prevS = nextStages[n] || {};
+        nextStages[n] = {
+          completed: true,
+          stars: Math.max(prevS.stars || 0, summary.stars),
+          bestAccuracy: Math.max(prevS.bestAccuracy || 0, summary.accuracy)
+        };
+      });
+    }
+
+    const doneCount = [1, 2, 3, 4, 5, 6].filter((n) => nextStages[n]?.completed).length;
+
     const nextProg = {
-      status: 'completed',
-      currentStage: 7,
+      status: doneCount === 6 ? 'completed' : 'in_progress',
+      currentStage: summary.singleStage || 7,
       bestAccuracy: Math.max(prev.bestAccuracy || 0, summary.accuracy),
       lastAccuracy: summary.accuracy,
       stars: Math.max(prev.stars || 0, summary.stars),
       points: (prev.points || 0) + summary.points,
-      mistakeWords: summary.mistakeList.map((w) => ({ bg: w.bg, en: w.en }))
+      mistakeWords: summary.mistakeList.map((w) => ({ bg: w.bg, en: w.en })),
+      stages: nextStages
     };
     setProgress((p) => ({ ...p, [topicId]: nextProg }));
     upsertProgress(client, familyCode, topicId, nextProg);
@@ -215,18 +246,31 @@ export default function App() {
     );
   }
 
-  const activeTopic = topics.find((tp) => tp.id === activeLessonTopicId);
-  if (activeTopic) {
+  const activeTopic = activeLesson ? topics.find((tp) => tp.id === activeLesson.topicId) : null;
+  if (activeTopic && activeLesson) {
     return (
       <LessonRunner
+        key={`${activeTopic.id}-${activeLesson.singleStage ?? 'full'}-${activeLesson.runKey}`}
         topic={activeTopic}
         allTopics={topics}
+        singleStage={activeLesson.singleStage}
         onComplete={(summary) => handleLessonComplete(activeTopic.id, summary)}
-        onExit={() => setActiveLessonTopicId(null)}
+        onRepeat={() => handleStartLesson(activeTopic.id, activeLesson.singleStage)}
+        onNextSubsection={() => {
+          if (activeLesson.singleStage !== null && activeLesson.singleStage < 6) {
+            handleStartLesson(activeTopic.id, activeLesson.singleStage + 1);
+          }
+        }}
+        onExit={() => {
+          setSelectedChildTopicId(activeTopic.id);
+          setActiveLesson(null);
+        }}
         t={t}
       />
     );
   }
+
+  const selectedChildTopic = topics.find((tp) => tp.id === selectedChildTopicId);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -238,6 +282,7 @@ export default function App() {
         onSwitchRole={() => {
           if (role === 'parent') {
             setRole('child');
+            setSelectedChildTopicId(null);
           } else {
             setPinInput('');
             setPinError(false);
@@ -266,8 +311,22 @@ export default function App() {
           cloudConnected={cloudSynced}
           t={t}
         />
+      ) : selectedChildTopic ? (
+        <TopicHub
+          topic={selectedChildTopic}
+          topicProgress={progress[selectedChildTopic.id]}
+          onBack={() => setSelectedChildTopicId(null)}
+          onStartSubsection={(subId) => handleStartLesson(selectedChildTopic.id, subId)}
+          onStartFullLesson={() => handleStartLesson(selectedChildTopic.id, null)}
+          t={t}
+        />
       ) : (
-        <ChildDashboard topics={topics} progress={progress} onStartLesson={handleStartLesson} t={t} />
+        <ChildDashboard
+          topics={topics}
+          progress={progress}
+          onOpenTopic={(tid) => setSelectedChildTopicId(tid)}
+          t={t}
+        />
       )}
 
       {showPinModal && (
@@ -335,10 +394,12 @@ export default function App() {
           onResetDemo={() => {
             setTopics(createDemoTopics());
             setProgress({});
+            setSelectedChildTopicId(null);
             setShowSettings(false);
           }}
           onLogout={() => {
             setFamilyCode('');
+            setSelectedChildTopicId(null);
             setShowSettings(false);
           }}
           onClose={() => setShowSettings(false)}
